@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Comptage GPS">
+<title>Comptage GPS — Normal, Pied qui végète, Manquants</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+<style>
+* { box-sizing: border-box; }
+body {
+  margin:0;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  background:#f6f7f8;
+  color:#111827;
+  padding:12px;
+  padding-bottom:28px;
+}
+h1 { text-align:center; font-size:23px; margin:6px 0 10px; }
+.card,.counter {
+  background:#fff;
+  border:1px solid #d1d5db;
+  border-radius:18px;
+  padding:12px;
+  margin-bottom:12px;
+  box-shadow:0 1px 4px rgba(0,0,0,.06);
+}
+label { display:block; font-weight:800; margin-bottom:6px; font-size:15px; }
+select,input,textarea {
+  width:100%;
+  font-size:17px;
+  padding:12px;
+  border:1px solid #d1d5db;
+  border-radius:14px;
+  background:#fff;
+}
+textarea { min-height:62px; resize:vertical; }
+.small { color:#6b7280; font-size:13px; margin-top:6px; line-height:1.35; }
+.status {
+  padding:10px;
+  border-radius:14px;
+  background:#f3f4f6;
+  font-size:14px;
+  font-weight:700;
+  line-height:1.35;
+}
+.status.ok { background:#dcfce7; color:#14532d; }
+.status.warn { background:#fef3c7; color:#78350f; }
+.status.err { background:#fee2e2; color:#7f1d1d; }
+
+#map {
+  height: 42vh;
+  min-height:310px;
+  width:100%;
+  border-radius:18px;
+  border:1px solid #d1d5db;
+  overflow:hidden;
+}
+.map-actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px; }
+button {
+  border:0;
+  border-radius:16px;
+  font-size:18px;
+  font-weight:900;
+  min-height:58px;
+  background:#111827;
+  color:white;
+  touch-action:manipulation;
+}
+button.secondary { background:#4b5563; }
+button.save { background:#1d4ed8; }
+button.export { background:#166534; }
+button.reset { background:#b91c1c; }
+button.info { background:#0369a1; }
+button.minus { background:#374151; font-size:30px; }
+button.plus { font-size:30px; }
+
+.counter-title { font-weight:900; font-size:18px; margin-bottom:9px; display:flex; align-items:center; gap:8px; }
+.dot { width:14px; height:14px; border-radius:50%; display:inline-block; border:1px solid rgba(0,0,0,.2); }
+.counter-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; align-items:center; }
+.value {
+  text-align:center;
+  font-size:38px;
+  font-weight:900;
+  line-height:68px;
+  background:#f3f4f6;
+  border-radius:16px;
+  min-height:68px;
+}
+.grid2 { display:grid; grid-template-columns:1fr; gap:10px; }
+.check-grid { display:grid; grid-template-columns:1fr; gap:7px; }
+.check-item {
+  display:flex; align-items:center; gap:10px;
+  background:#f9fafb; border:1px solid #d1d5db; border-radius:14px; padding:10px; font-weight:800;
+}
+.check-item input { width:22px; height:22px; padding:0; }
+
+.saved-list {
+  max-height:260px;
+  overflow:auto;
+  border:1px solid #d1d5db;
+  border-radius:14px;
+  background:#f9fafb;
+  padding:8px;
+}
+.saved-item {
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:12px;
+  padding:9px;
+  margin-bottom:8px;
+  font-size:13px;
+}
+.actions {
+  display:grid;
+  grid-template-columns:1fr;
+  gap:10px;
+  position:sticky;
+  bottom:10px;
+  z-index:800;
+}
+.leaflet-popup-content { font-size:14px; }
+@media (min-width:900px) {
+  body { max-width:1180px; margin:auto; }
+  .layout { display:grid; grid-template-columns: 0.95fr 1.05fr; gap:12px; align-items:start; }
+  #map { height: 72vh; min-height:620px; position:sticky; top:10px; }
+  .grid2 { grid-template-columns:1fr 1fr; }
+  .actions { position:static; }
+}
+</style>
+</head>
+<body>
+<h1>Comptage vigne GPS — Normal / Pied qui végète / Manquants</h1>
+
+<div class="layout">
+  <div>
+    <div class="card">
+      <label for="parcelle">Parcelle comptée — nom</label>
+      <select id="parcelle"></select>
+      <div class="small">La parcelle choisie est prioritaire : tous les points sont rattachés à cette parcelle. Si le GPS tombe à côté, le point est forcé sur son contour.</div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <label for="rang">Rang / secteur</label>
+        <input id="rang" type="text" placeholder="Ex : rang 8, zone nord...">
+      </div>
+      <div class="card">
+        <label for="operateur">Opérateur</label>
+        <input id="operateur" type="text" placeholder="Optionnel">
+      </div>
+    </div>
+
+    <div class="card">
+      <label>État GPS</label>
+      <div id="gpsStatus" class="status warn">GPS non activé. Clique sur “Activer GPS”.</div>
+      <div class="map-actions">
+        <button type="button" class="info" onclick="startGpsWatch()">Activer GPS</button>
+        <button type="button" class="secondary" onclick="centerOnSelectedParcel()">Centrer parcelle</button>
+      </div>
+      <div class="small">À chaque clic “+”, l’application enregistre un point géolocalisé. Si le signal est absent, un point de secours est placé au centre de la parcelle avec le statut GPS “erreur”.</div>
+    </div>
+
+    <div class="card">
+      <label>Compteurs à afficher</label>
+      <div id="checks" class="check-grid"></div>
+      <button type="button" class="secondary" onclick="showAllCounters()">Tout afficher</button>
+    </div>
+
+    <div id="counters"></div>
+
+    <div class="card">
+      <label for="commentaire">Commentaire général</label>
+      <textarea id="commentaire" placeholder="Optionnel"></textarea>
+    </div>
+
+    <div class="card">
+      <label>Observations enregistrées</label>
+      <div class="small" id="savedSummary">Aucune observation.</div>
+      <div class="saved-list" id="savedList"></div>
+      <div class="map-actions">
+        <button type="button" class="secondary" onclick="deleteLastObservation()">Supprimer dernier point</button>
+        <button type="button" class="reset" onclick="clearAllObservations()">Tout effacer</button>
+      </div>
+      <button type="button" class="secondary" onclick="resetCurrentParcel()" style="width:100%;margin-top:10px;">Remettre à zéro les compteurs de la parcelle</button>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="export" onclick="exportCSV()">Exporter CSV points</button>
+      <button type="button" class="export" onclick="exportGeoJSON()">Exporter GeoJSON QGIS</button>
+      <button type="button" class="info" onclick="exportSummaryCSV()">Exporter synthèse parcelle</button>
+    </div>
+  </div>
+
+  <div>
+    <div id="map"></div>
+    <div id="mapNotice" class="status warn" role="status" hidden style="margin-top:8px;"></div>
+  </div>
+</div>
+
+<script>
+const PARCELLAIRE = {"type":"FeatureCollection","name":"Parcellaire","features":[{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Vauzelle terme","cepage":"PN","surf_cad":0.266,"surf_qgis":0.2039,"ref_cadast":"B1069","pg":"41B","annee_plan":1980,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"4f43739b-1113-422f-b3ce-0914bdfcee56","Nom":"Vauzelle terme","Cepage":"Pinot noir","Surface":0.2039,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9767759876,49.063522333],[3.9771971426,49.0634085972],[3.9770157364,49.0631509354],[3.9767851886,49.0628580118],[3.9767472105,49.0628393013],[3.9767036952,49.0628339493],[3.9764746356,49.0628890648],[3.9767759876,49.063522333]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Le leon","cepage":"PN","surf_cad":0.5184,"surf_qgis":0.438,"ref_cadast":"H0544/H0545","pg":"41B","annee_plan":2002,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"423e6374-e333-4844-8373-c17139ec9c9c","Nom":"Le leon","Cepage":"Pinot noir","Surface":0.438,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9771371979,49.0623387776],[3.9773901445,49.0622459034],[3.9782610217,49.0619230967],[3.977892493,49.0615266923],[3.9776378036,49.0616804434],[3.9774207302,49.061795374],[3.9772489001,49.0618538294],[3.9770131374,49.06189854],[3.9767606274,49.0619376805],[3.9771371979,49.0623387776]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Corne bautray","cepage":"CH","surf_cad":1.3,"surf_qgis":1.2992,"ref_cadast":"AE0517/AE0518","pg":"41B","annee_plan":1960,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"0bc0b69f-1efc-4117-98c8-bb460706e692","Nom":"Corne bautray","Cepage":"Chardonnay","Surface":1.2992,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9812643959,49.0711557141],[3.9811047384,49.0715530901],[3.9813738598,49.0717011435],[3.9810952131,49.0721208872],[3.9810123915,49.0723336259],[3.9810371916,49.072343884],[3.9821465019,49.0729101502],[3.9822237295,49.0728990586],[3.9824593691,49.0729218573],[3.9827156163,49.0725807474],[3.9825986041,49.0724400121],[3.9824385975,49.0722454238],[3.9823260072,49.0720323796],[3.9822571573,49.0718360949],[3.9821884268,49.0717225421],[3.9816395107,49.0713979969],[3.9815146486,49.0713010684],[3.9813999891,49.0712078603],[3.9813385968,49.0711760292],[3.9812643959,49.0711557141]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Griboury","cepage":"CH","surf_cad":0.5008,"surf_qgis":0.4831,"ref_cadast":"AC0058/AC0057/AC0063/AC0138/AC0094/AC0137","pg":"41B","annee_plan":2020,"densite":8333,"statut":"P","proprio":"JHC/LC","id":"d9681a55-dfdd-407c-9966-169fcbe0fd22","Nom":"Griboury","Cepage":"Chardonnay","Surface":0.4831,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9727637677,49.0762035252],[3.9727997007,49.0761899211],[3.9731411035,49.0761785988],[3.9737012807,49.0761778657],[3.9736523342,49.0756523875],[3.9732416292,49.0755572907],[3.9731735176,49.0755530874],[3.9727345981,49.0755357197],[3.9726938686,49.0757566695],[3.9726914503,49.076129461],[3.9727200901,49.0761900899],[3.9727377609,49.0762061131],[3.9727637677,49.0762035252]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Les romes","cepage":"PN","surf_cad":0.2921,"surf_qgis":0.2171,"ref_cadast":"AD0115/AD0116/AD0117/AD0118/AD0119/AD0385/AD0440","pg":"41B","annee_plan":2010,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"f780c978-a334-4c23-aa5c-266f1b72ffcc","Nom":"Les romes","Cepage":"Pinot noir","Surface":0.2171,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9798328613,49.0790065555],[3.9798772578,49.0790195068],[3.9799406821,49.079005201],[3.9801392616,49.0789422458],[3.9805004187,49.0788646509],[3.980405055,49.0787208848],[3.9800874519,49.0786901918],[3.979902594,49.0786365441],[3.9797731242,49.0785263387],[3.9797241578,49.0784630243],[3.9796714781,49.0784330234],[3.9796278596,49.0784229185],[3.9796032904,49.0784250206],[3.9795845105,49.0784270756],[3.9795773276,49.078429987],[3.9795944731,49.0787246409],[3.9796281649,49.0788223139],[3.9797196261,49.0789128593],[3.9798328613,49.0790065555]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Le vieux château bas","cepage":"PN","surf_cad":0.4143,"surf_qgis":0.3662,"ref_cadast":"AK0023","pg":"41B","annee_plan":2013,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"afbabcb4-31f6-402a-99d7-98d619b1d1c8","Nom":"Le vieux château bas","Cepage":"Pinot noir","Surface":0.3662,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9655494691,49.0642552041],[3.9657681231,49.0643009949],[3.9658994658,49.0643598496],[3.966082587,49.064207175],[3.9661773256,49.0641655221],[3.9665473422,49.0641406742],[3.9664766619,49.063764663],[3.9655150898,49.0638075789],[3.965477862,49.0639067777],[3.9655494691,49.0642552041]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Le vieux château haut","cepage":"PN","surf_cad":0.419,"surf_qgis":0.2616,"ref_cadast":"AK0021/AK0531","pg":"41B","annee_plan":1992,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"5001dbd0-cdf4-4634-b884-8c412309d8cc","Nom":"Le vieux château haut","Cepage":"Pinot noir","Surface":0.2616,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9652404661,49.0649537881],[3.9659970428,49.0648592692],[3.9659979094,49.0645948958],[3.9657721364,49.0644388516],[3.9652476977,49.0644868096],[3.9652404661,49.0649537881]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Le village","cepage":"PM","surf_cad":0.3713,"surf_qgis":0.3305,"ref_cadast":"AI0593/AI1136/AI1137","pg":"41B","annee_plan":1970,"densite":8333,"statut":"P","proprio":"LC","id":"b80659bd-154f-4971-9493-0c929a6c237d","Nom":"Le village","Cepage":"Pinot meunier","Surface":0.3305,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9636089302,49.0681977559],[3.964029068,49.0681425592],[3.9637190609,49.0672311779],[3.9632837129,49.0672996322],[3.9636089302,49.0681977559]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre rouge","cepage":"PN","surf_cad":1.3307,"surf_qgis":1.228,"ref_cadast":"AB0019/AB0280","pg":"41B","annee_plan":1994,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"0e0031b1-eb36-47ff-a434-65a48cd58047","Nom":"Terre rouge","Cepage":"Pinot noir","Surface":1.228,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9633840889,49.0724374787],[3.9608892721,49.0727394083],[3.9610904162,49.073752463],[3.9611779916,49.0737527136],[3.9634103604,49.0725661219],[3.9633840889,49.0724374787]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Pointe campanile","cepage":"PM","surf_cad":0.1045,"surf_qgis":0.0904,"ref_cadast":"AB0352","pg":"41B","annee_plan":1972,"densite":8333,"statut":"P","proprio":"JHC","id":"d8f18a9c-0e44-4878-a98a-b67a89a11c91","Nom":"Pointe campanile","Cepage":"Pinot meunier","Surface":0.0904,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9608677074,49.0686447821],[3.9610616899,49.0686080456],[3.9608463324,49.068076758],[3.9607341007,49.0679559331],[3.9606612539,49.0679298888],[3.9607915068,49.0683986188],[3.9608677074,49.0686447821]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre Jean Lelarge les blancs du haut","cepage":"CH","surf_cad":0.4376,"surf_qgis":0.3095,"ref_cadast":"AK0266/AK0298","pg":"41B","annee_plan":1990,"densite":8333,"statut":"P","proprio":"JHC","id":"0ad04f86-86ce-4c46-ad2c-86250f5f8887","Nom":"Terre Jean Lelarge les blancs du haut","Cepage":"Chardonnay","Surface":0.3095,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9570157831,49.0701794508],[3.9563324348,49.0696190744],[3.9559452858,49.0698161489],[3.9559185437,49.0698572525],[3.9565190224,49.0703583809],[3.9570157831,49.0701794508]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Basse maladries","cepage":"CH","surf_cad":0.4825,"surf_qgis":0.4242,"ref_cadast":"AH0246","pg":"41B","annee_plan":1988,"densite":8333,"statut":"P","proprio":"LC","id":"b4b8ca9d-840b-4734-84a2-df63f4a482d1","Nom":"Basse maladries","Cepage":"Chardonnay","Surface":0.4242,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9558149094,49.0779011964],[3.956496905,49.0776761028],[3.9565053085,49.0776608208],[3.9563127359,49.0774227151],[3.956129813,49.0772368342],[3.9559033314,49.0770436919],[3.9557034813,49.0768817186],[3.9554742036,49.0770081153],[3.9558149094,49.0779011964]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Milnon","cepage":"PN","surf_cad":0.1075,"surf_qgis":0.0921,"ref_cadast":"AH0238","pg":"41B","annee_plan":2012,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"a87ae046-d734-454f-a537-2d6a89e6778e","Nom":"Milnon","Cepage":"Pinot noir","Surface":0.0921,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9744867264,49.0660192381],[3.9749048152,49.0661318],[3.9754070023,49.0662341287],[3.9754142107,49.0661341614],[3.9750033303,49.066008218],[3.974693368,49.0659184832],[3.9744867264,49.0660192381]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Crohau","cepage":"PN","surf_cad":0.3153,"surf_qgis":0.3066,"ref_cadast":"B0556/B1035","pg":"41B","annee_plan":2022,"densite":8333,"statut":"PNP","proprio":"JHC","id":"f9641ac5-e9f1-45ba-866f-861be8dcaa82","Nom":"Crohau","Cepage":"Pinot noir","Surface":0.3066,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9812076727,49.0674553824],[3.9811953392,49.067463463],[3.9815653445,49.0681287567],[3.9816557902,49.0681260633],[3.9820833519,49.0680398719],[3.9816311232,49.0673314806],[3.9812076727,49.0674553824]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Conscience","cepage":"PN","surf_cad":0.0682,"surf_qgis":0.0607,"ref_cadast":"AE0270","pg":"41B","annee_plan":2007,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"e6a702dd-0ba7-46be-afeb-ad8d20e74f87","Nom":"Conscience","Cepage":"Pinot noir","Surface":0.0607,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9729589832,49.0740859313],[3.9734743911,49.0738935815],[3.973396299,49.0737830823],[3.97287152,49.0739692937],[3.9729589832,49.0740859313]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Les auges","cepage":"PM","surf_cad":2.395,"surf_qgis":2.1562,"ref_cadast":"AI0477/AI0829/AI0830/AI0504/AI0479/AI0480/AI0505","pg":"41B","annee_plan":1962,"densite":8333,"statut":"P","proprio":"JHC/LC","id":"bb918e65-8d5b-459f-a7a1-3d46dc976fc6","Nom":"Les auges","Cepage":"Pinot meunier","Surface":2.1562,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9652542784,49.0718313899],[3.96733374,49.0717380077],[3.9673085852,49.0716830768],[3.9672666606,49.0715402564],[3.9673505099,49.0708920663],[3.9673002003,49.070414158],[3.9652354601,49.0705827514],[3.9652542784,49.0718313899]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre rouge nord plante","cepage":"PN","surf_cad":0.8328,"surf_qgis":0.7826,"ref_cadast":"AB0549","pg":"41B","annee_plan":2022,"densite":8333,"statut":"PNP","proprio":"JHC/LC","id":"c91c16b3-eef7-4fae-9601-1d65da8e8fff","Nom":"Terre rouge nord plante","Cepage":"Pinot noir","Surface":0.7826,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9642700455,49.0720461964],[3.9642762206,49.0720994586],[3.9646190598,49.0719155434],[3.9647000809,49.0718298021],[3.9649369121,49.0714582549],[3.9649556093,49.070670239],[3.9649057501,49.0706457409],[3.964026982,49.0707274012],[3.9642700455,49.0720461964]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre rouge nord","cepage":"PN","surf_cad":1.0949,"surf_qgis":1.018,"ref_cadast":"AB0548/AB0547/B0546","pg":"41B","annee_plan":2007,"densite":8333,"statut":"P","proprio":"JHC/LC","id":"964064ab-d078-4634-ac0e-ae51a4d65390","Nom":"Terre rouge nord","Cepage":"Pinot noir","Surface":1.018,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9640272244,49.070728244],[3.9635564359,49.0707702728],[3.9634816471,49.0707906879],[3.9634255556,49.0707743558],[3.9627836186,49.0708151859],[3.9633086984,49.0715606239],[3.9639250123,49.0722582875],[3.9639884564,49.0722434437],[3.9642784865,49.0720979742],[3.9640272244,49.070728244]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Pointe terre rouge","cepage":"PN","surf_cad":0.5932,"surf_qgis":0.5586,"ref_cadast":"AB0295/AB0550/AB0545","pg":"41B","annee_plan":null,"densite":8333,"statut":"P","proprio":"JHC/LC","id":"9b6ae3c4-3672-446e-87fa-bf80f90cdf94","Nom":"Pointe terre rouge","Cepage":"Pinot noir","Surface":0.5586,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9624714009,49.0724702536],[3.9625131963,49.0724942115],[3.9633700034,49.0723949576],[3.9623094434,49.0710498764],[3.962267648,49.071063567],[3.9624714009,49.0724702536]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Fond de béva","cepage":"CH","surf_cad":1.0232,"surf_qgis":0.9125,"ref_cadast":"AI0236/AI0205/AI0204/AI0238/AI0239","pg":"Fercal et 41B","annee_plan":1991,"densite":8333,"statut":"P","proprio":"JHC/LC","id":"8c1f5390-8a84-4208-a48d-a7da37b290e0","Nom":"Fond de béva","Cepage":"Chardonnay","Surface":0.9125,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9583958357,49.0729883682],[3.9594173466,49.072925754],[3.9594113729,49.0728005254],[3.9594024123,49.0726811665],[3.9593190031,49.0723561005],[3.9592536529,49.072125395],[3.9591265832,49.0717805238],[3.9579560047,49.0722373658],[3.9583595816,49.0727142624],[3.9583825701,49.0727560952],[3.9583958357,49.0729883682]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Vauregniers villers","cepage":"Terre","surf_cad":0.0554,"surf_qgis":0.0538,"ref_cadast":"B1702","pg":null,"annee_plan":null,"densite":null,"statut":"NP","proprio":"Jacquesson","id":"7a793d06-cef6-4e72-8efd-a86888da465d","Nom":"Vauregniers villers","Cepage":"Terre","Surface":0.0538,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9869136,49.0627938],[3.9868477,49.0628091],[3.9871754,49.0633903],[3.987164,49.0633936],[3.9873015,49.0636447],[3.9873698,49.0636295],[3.9874808,49.0638353],[3.9874894,49.0638259],[3.9874659,49.0637838],[3.9869136,49.0627938]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Moque bouteilles","cepage":"PN","surf_cad":0.2045,"surf_qgis":0.2011,"ref_cadast":"AH0108/AH0546/AH0550/AH0552/AH0565","pg":"41B","annee_plan":2005,"densite":8333,"statut":"P","proprio":"Jacquesson","id":"bedb8b4d-80ed-404d-a85c-011218a51003","Nom":"Moque bouteilles","Cepage":"Pinot noir","Surface":0.2011,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9731232,49.0673806],[3.9730068,49.0673681],[3.9727771,49.0673431],[3.9726925,49.0673341],[3.9726373,49.0673411],[3.9725879,49.0673475],[3.9725869,49.0673938],[3.9726311,49.0675636],[3.972642,49.0675912],[3.9726917,49.0677171],[3.9726929,49.0677202],[3.9728981,49.0676751],[3.9732868,49.0675872],[3.9736171,49.0675124],[3.973779,49.0674761],[3.9737774,49.0674681],[3.9737111,49.0674445],[3.9735432,49.0674262],[3.9731232,49.0673806]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Les dalles","cepage":"PN","surf_cad":0.1825,"surf_qgis":0.1836,"ref_cadast":"AI0018/AI0019/AI0492","pg":"41B","annee_plan":2011,"densite":8333,"statut":"P","proprio":"JHC","id":"ba8f1544-44a9-442f-bc21-fe0c88a03ed6","Nom":"Les dalles","Cepage":"Pinot noir","Surface":0.1836,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9708429,49.0710137],[3.9707271,49.0710352],[3.9706851,49.0710428],[3.9706337,49.0710518],[3.9706363,49.0710599],[3.9708258,49.0715651],[3.9709097,49.0715523],[3.9710299,49.0715339],[3.9711896,49.0715098],[3.9712249,49.0714794],[3.9710788,49.0710678],[3.9710438,49.0709747],[3.9709293,49.0709967],[3.9708429,49.0710137]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Fond de béva Evelyne","cepage":"CH","surf_cad":0.3191,"surf_qgis":0.3217,"ref_cadast":"AI0194","pg":"41B","annee_plan":1991,"densite":8333,"statut":"P","proprio":"LC","id":"f1a81b69-051d-4b76-a119-a7c9efebfcde","Nom":"Fond de béva Evelyne","Cepage":"Chardonnay","Surface":0.3217,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.957754,49.0745515],[3.9580398,49.0746814],[3.9585333,49.0749038],[3.9588053,49.075028],[3.9590674,49.0748897],[3.9591641,49.0748384],[3.9582501,49.0744203],[3.9579805,49.0742944],[3.9579386,49.0743469],[3.9578444,49.0744632],[3.957754,49.0745515]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Fond de béva 13 ares","cepage":"PN","surf_cad":0.1359,"surf_qgis":0.1383,"ref_cadast":"AI0197","pg":"41B","annee_plan":2022,"densite":8333,"statut":"PNP","proprio":"Jacquesson","id":"32286d2d-182c-4190-81d3-adde785e2909","Nom":"Fond de béva 13 ares","Cepage":"Pinot noir","Surface":0.1383,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9572935,49.0743525],[3.9575562,49.0744738],[3.9577441,49.0745613],[3.957754,49.0745515],[3.9578444,49.0744632],[3.9579386,49.0743469],[3.9579805,49.0742944],[3.9580442,49.0742146],[3.9580771,49.0741733],[3.9577089,49.0742056],[3.9572466,49.0742464],[3.9572718,49.0742872],[3.9573071,49.0743408],[3.9572935,49.0743525]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Le clos Saint-Thierry","cepage":"Terre","surf_cad":0.1183,"surf_qgis":0.1123,"ref_cadast":"A1202","pg":null,"annee_plan":null,"densite":null,"statut":"NP","proprio":"LC","id":"9b5b63c1-1d45-43a1-bb43-961939e8d4fb","Nom":"Le clos Saint-Thierry","Cepage":"Terre","Surface":0.1123,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9753078442,49.0841346473],[3.9756388897,49.0838705392],[3.9753062829,49.0837046712],[3.9749961094,49.0839800374],[3.9753078442,49.0841346473]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"La cotelette","cepage":"PN","surf_cad":0.0825,"surf_qgis":0.081,"ref_cadast":"B1450/B1453/B1455/B1458/B1578/B1582","pg":"41B","annee_plan":1991,"densite":8333,"statut":"P","proprio":"LC","id":"761cd05d-9884-41a4-97f8-91b82a947871","Nom":"La cotelette","Cepage":"Pinot noir","Surface":0.081,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9840907,49.0676097],[3.9841044,49.0675416],[3.9839661,49.0675763],[3.9835953,49.0676693],[3.983336,49.0677344],[3.9833417,49.0677412],[3.9834455,49.0678232],[3.983475,49.0678465],[3.9840333,49.0677023],[3.9840947,49.0676863],[3.9840815,49.0676566],[3.9840907,49.0676097]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Montecuelle","cepage":"Terre","surf_cad":0.0735,"surf_qgis":0.0808,"ref_cadast":"AI0061","pg":null,"annee_plan":null,"densite":null,"statut":"NP","proprio":"Jacquesson","id":"13d9096d-f2d6-472f-82c2-c7e6c7035d3b","Nom":"Montecuelle","Cepage":"Terre","Surface":0.0808,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.953895793,49.0715028937],[3.9545285049,49.0724490713],[3.9546084887,49.072424656],[3.9539876929,49.0714704575],[3.953895793,49.0715028937]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre Jean Lelarge le versant","cepage":"CH","surf_cad":0.3617,"surf_qgis":0.3236,"ref_cadast":"AK0226/AK0227","pg":"41B","annee_plan":1982,"densite":8333,"statut":"P","proprio":"JHC","id":"ea834ef3-c4ff-47e4-8b9a-563391ba7591","Nom":"Terre Jean Lelarge le versant","Cepage":"Chardonnay","Surface":0.3236,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9560242762,49.0699989078],[3.9553034422,49.0702405323],[3.9553445016,49.070280236],[3.9556913901,49.0706079335],[3.9557618309,49.0706211621],[3.9564904828,49.0703804799],[3.9560242762,49.0699989078]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre rouge sud","cepage":"PN","surf_cad":1.794,"surf_qgis":1.718,"ref_cadast":"AB0361/AB0390/AB0201/AB0202/AB0203/AB0204/AB0205/AB0206/AB0196","pg":"41B","annee_plan":2017,"densite":8333,"statut":"P","proprio":"JHC/LC","id":"33945864-f20e-4dcd-9fe1-15552eef9d31","Nom":"Terre rouge sud","Cepage":"Pinot noir","Surface":1.718,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.962721125,49.0684748889],[3.9631809916,49.0683631435],[3.9631989322,49.0682661736],[3.9636086432,49.0681984728],[3.9632796649,49.067287648],[3.9628804867,49.0673552344],[3.9627279917,49.0673758042],[3.9625799818,49.0673787427],[3.9624723383,49.0673846198],[3.9623519609,49.0674110038],[3.9618399325,49.0675372767],[3.9613420811,49.0676430636],[3.9617367741,49.0687244284],[3.9622176981,49.0686043925],[3.962721125,49.0684748889]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre Jean Lelarge la plante du milieu","cepage":"PM","surf_cad":0.249,"surf_qgis":0.1785,"ref_cadast":"AK0266","pg":"41B","annee_plan":1993,"densite":8333,"statut":"p","proprio":"JHC","id":"7b44d417-c781-47b8-a37b-49988ea985e5","Nom":"Terre Jean Lelarge la plante du milieu","Cepage":"Pinot meunier","Surface":0.1785,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9561221032,49.0696714978],[3.9553807841,49.0690589191],[3.9551600339,49.0691745225],[3.9559067869,49.0697873202],[3.9561221032,49.0696714978]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre Jean Lelarge Evelyne station","cepage":"PM","surf_cad":0.4391,"surf_qgis":0.3048,"ref_cadast":"AK0231","pg":"41B","annee_plan":1984,"densite":8333,"statut":"P","proprio":"JHC","id":"30ec5420-a660-4df9-bfd7-da51484b72e1","Nom":"Terre Jean Lelarge Evelyne station","Cepage":"Pinot meunier","Surface":0.3048,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.954393966,49.0685458544],[3.955128563,49.0691486965],[3.9554764777,49.0689587899],[3.9554960892,49.0689234487],[3.9554841447,49.0689035737],[3.9548904497,49.0684156991],[3.9548336282,49.0683952296],[3.954393966,49.0685458544]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre Jean Lelarge Evelyne","cepage":"CH","surf_cad":0.1993,"surf_qgis":0.1479,"ref_cadast":"AK0299","pg":"41B","annee_plan":1992,"densite":8333,"statut":"P","proprio":"JHC","id":"698debd6-b790-4039-aeb3-ee32112f3f54","Nom":"Terre Jean Lelarge Evelyne","Cepage":"Chardonnay","Surface":0.1479,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9553807841,49.0690589191],[3.9561221032,49.0696714978],[3.9562582372,49.0695982684],[3.9562731215,49.0695420438],[3.9556031464,49.0689996246],[3.9555638294,49.0689866239],[3.9555218283,49.068985056],[3.9553807841,49.0690589191]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre Jean Lelarge","cepage":"PM","surf_cad":0.4889,"surf_qgis":0.4528,"ref_cadast":"AK0229","pg":"41B","annee_plan":1983,"densite":8333,"statut":"P","proprio":"JHC","id":"d04f203c-74de-4699-a0ec-4cbffe328280","Nom":"Terre Jean Lelarge","Cepage":"Pinot meunier","Surface":0.4528,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9548652334,49.0693289035],[3.9545879003,49.0694741356],[3.9545648364,49.069518538],[3.9550051391,49.0699287039],[3.9554922777,49.0698710883],[3.9548652334,49.0693289035]]],[[[3.9540971269,49.0686647264],[3.9539167227,49.0687472319],[3.9538627469,49.0688028156],[3.9538693919,49.0688493595],[3.9545041049,49.0694429443],[3.9545766008,49.069449976],[3.9548393761,49.0693065452],[3.9540971269,49.0686647264]]]]}},{"type":"Feature","properties":{"domaine":"Jacquesson","nom_parcel":"Terre Jean Lelarge Jean-Hervé","cepage":"CH","surf_cad":0.4166,"surf_qgis":0.4699,"ref_cadast":"AK0230","pg":"41B","annee_plan":1982,"densite":8333,"statut":"P","proprio":"JHC","id":"8007599e-b591-45c6-80b0-db1cba0fcb63","Nom":"Terre Jean Lelarge Jean-Hervé","Cepage":"Chardonnay","Surface":0.4699,"Exploitant":"Jacquesson"},"geometry":{"type":"MultiPolygon","coordinates":[[[[3.9554922777,49.0698710883],[3.9558239985,49.0698318533],[3.9559067869,49.0697873202],[3.9551600339,49.0691745225],[3.9548652334,49.0693289035],[3.9554922777,49.0698710883]]],[[[3.9548393761,49.0693065452],[3.955128563,49.0691486965],[3.954393966,49.0685458544],[3.9542468272,49.0685962624],[3.9540971269,49.0686647264],[3.9548393761,49.0693065452]]]]}}]};
+const PROPERTY_PARCELLE = "Nom"; // Champ utilisé comme nom de parcelle dans le GeoJSON
+const CATEGORIES = [{"id": "Normal", "name": "Normal", "color": "#15803d"}, {"id": "Pied_qui_vegete", "name": "Pied qui végète", "color": "#ea580c"}, {"id": "Manquants", "name": "Manquants", "color": "#111827"}];
+const STORAGE_KEY = "comptage_vigne_gps_observations_jacquesson_normal_vegete_manquants_v1";
+const DRAFT_KEY = "comptage_vigne_gps_draft_jacquesson_normal_vegete_manquants_v1";
+
+let map, allParcelsLayer, selectedParcelLayer, observationsLayer, gpsMarker;
+let selectedFeature = null;
+let lastGps = null;
+let gpsWatchId = null;
+let observations = loadObservations();
+let counts = Object.fromEntries(CATEGORIES.map(c => [c.id, 0]));
+
+function getParcelName(feature) {
+  return feature && feature.properties ? String(feature.properties[PROPERTY_PARCELLE] ?? "") : "";
+}
+
+function getSurface(feature) {
+  if (!feature || !feature.properties) return "";
+  return feature.properties.Surface ?? feature.properties.surface ?? "";
+}
+
+function init() {
+  populateParcelles();
+  buildCounters();
+  initMap();
+  loadDraft();
+  updateSelectedParcel();
+  recomputeCounts();
+  renderObservations();
+  bindInputs();
+}
+
+function populateParcelles() {
+  const select = document.getElementById("parcelle");
+  const features = PARCELLAIRE.features
+    .filter(f => getParcelName(f))
+    .sort((a,b) => getParcelName(a).localeCompare(getParcelName(b), "fr", { numeric:true }));
+  select.innerHTML = features.map(f => {
+    const n = getParcelName(f);
+    const surf = getSurface(f) !== "" && getSurface(f) != null ? " — " + Number(getSurface(f)).toFixed(2) + " ha" : "";
+    return `<option value="${escapeAttr(n)}">${escapeHtml(n)}${escapeHtml(surf)}</option>`;
+  }).join("");
+}
+
+function buildCounters() {
+  const checks = document.getElementById("checks");
+  const counters = document.getElementById("counters");
+  checks.innerHTML = CATEGORIES.map(c => `
+    <label class="check-item">
+      <input type="checkbox" checked onchange="toggleCounter('${c.id}', this.checked)">
+      <span><span class="dot" style="background:${c.color}"></span> ${escapeHtml(c.name)}</span>
+    </label>
+  `).join("");
+
+  counters.innerHTML = CATEGORIES.map(c => `
+    <div class="counter active" id="counter_${c.id}">
+      <div class="counter-title"><span class="dot" style="background:${c.color}"></span>${escapeHtml(c.name)}</div>
+      <div class="counter-row">
+        <button class="minus" type="button" onclick="minusObservation('${c.id}')">−</button>
+        <div class="value" id="value_${c.id}">0</div>
+        <button class="plus" type="button" onclick="addObservation('${c.id}')">+</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+function initMap() {
+  map = L.map("map", { zoomControl: true });
+  const ignUrl = "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILECOL={x}&TILEROW={y}";
+  const tileOptions = {
+    maxNativeZoom: 19,
+    maxZoom: 22,
+    attribution: '&copy; <a href="https://www.ign.fr/" target="_blank" rel="noopener">IGN</a>',
+    errorTileUrl: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
+  };
+  const aerial = L.tileLayer(ignUrl + "&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&FORMAT=image/jpeg", tileOptions);
+  const plan = L.tileLayer(ignUrl + "&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&FORMAT=image/png", tileOptions);
+  const blank = L.layerGroup();
+  const mapNotice = document.getElementById("mapNotice");
+  let failedTiles = 0;
+  [aerial, plan].forEach(layer => {
+    layer.on("tileerror", () => {
+      if (!map.hasLayer(layer)) return;
+      failedTiles++;
+      mapNotice.textContent = "Fond IGN indisponible ou connexion interrompue. Essayez un autre fond via le bouton des couches. Les parcelles et les comptages restent utilisables.";
+      mapNotice.hidden = false;
+    });
+    layer.on("loading", () => { failedTiles = 0; });
+    layer.on("load", () => {
+      if (map.hasLayer(layer) && failedTiles === 0) mapNotice.hidden = true;
+    });
+  });
+  aerial.addTo(map);
+  L.control.layers({ "Photos aériennes IGN": aerial, "Plan IGN": plan, "Sans fond": blank }, null, { collapsed: true }).addTo(map);
+  map.on("baselayerchange", () => { mapNotice.hidden = true; failedTiles = 0; });
+
+  allParcelsLayer = L.geoJSON(PARCELLAIRE, {
+    style: { color:"#6b7280", weight:1, fillColor:"#9ca3af", fillOpacity:0.08 },
+    onEachFeature: (feature, layer) => {
+      layer.bindPopup(`<strong>Parcelle : ${escapeHtml(getParcelName(feature))}</strong><br>Cépage : ${escapeHtml(feature.properties.Cepage || "Non renseigné")}<br>Surface : ${escapeHtml(getSurface(feature))} ha<br>Exploitant : ${escapeHtml(feature.properties.Exploitant || "Non renseigné")}`);
+    }
+  }).addTo(map);
+
+  selectedParcelLayer = L.geoJSON(null, {
+    style: { color:"#1d4ed8", weight:3, fillColor:"#60a5fa", fillOpacity:0.18 }
+  }).addTo(map);
+
+  observationsLayer = L.layerGroup().addTo(map);
+}
+
+function bindInputs() {
+  ["parcelle","rang","operateur","commentaire"].forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener(id === "parcelle" ? "change" : "input", () => {
+      if (id === "parcelle") updateSelectedParcel();
+      saveDraft();
+      recomputeCounts();
+      renderObservations();
+    });
+  });
+  window.addEventListener("pagehide", saveDraft);
+}
+
+function updateSelectedParcel() {
+  const name = document.getElementById("parcelle").value;
+  selectedFeature = PARCELLAIRE.features.find(f => getParcelName(f) === name) || null;
+  selectedParcelLayer.clearLayers();
+  if (selectedFeature) {
+    selectedParcelLayer.addData(selectedFeature);
+    centerOnSelectedParcel();
+  }
+}
+
+function centerOnSelectedParcel() {
+  if (!selectedFeature) return;
+  const tmp = L.geoJSON(selectedFeature);
+  map.fitBounds(tmp.getBounds(), { padding:[20,20] });
+}
+
+function startGpsWatch() {
+  if (!navigator.geolocation) {
+    setGpsStatus("La géolocalisation n'est pas disponible sur ce navigateur.", "err");
+    return;
+  }
+  setGpsStatus("Recherche GPS en cours…", "warn");
+  if (gpsWatchId !== null) navigator.geolocation.clearWatch(gpsWatchId);
+  gpsWatchId = navigator.geolocation.watchPosition(pos => {
+    lastGps = {
+      lon: pos.coords.longitude,
+      lat: pos.coords.latitude,
+      accuracy: Math.round(pos.coords.accuracy),
+      timestamp: new Date().toISOString()
+    };
+    setGpsStatus(`GPS OK — précision ±${lastGps.accuracy} m — ${new Date().toLocaleTimeString("fr-FR")}`, lastGps.accuracy <= 15 ? "ok" : "warn");
+    updateGpsMarker();
+  }, err => {
+    setGpsStatus("GPS refusé ou indisponible. Sur iPhone : Réglages → Confidentialité et sécurité → Service de localisation → Safari → Autoriser. Détail : " + err.message, "err");
+  }, {
+    enableHighAccuracy: true,
+    maximumAge: 5000,
+    timeout: 10000
+  });
+}
+
+function updateGpsMarker() {
+  if (!lastGps) return;
+  const latlng = [lastGps.lat, lastGps.lon];
+  if (!gpsMarker) {
+    gpsMarker = L.circleMarker(latlng, { radius:7, color:"#111827", fillColor:"#22c55e", fillOpacity:0.9, weight:2 }).addTo(map);
+  } else {
+    gpsMarker.setLatLng(latlng);
+  }
+  gpsMarker.bindPopup(`Position téléphone<br>Précision ±${lastGps.accuracy} m`);
+}
+
+function setGpsStatus(msg, type) {
+  const el = document.getElementById("gpsStatus");
+  el.textContent = msg;
+  el.className = "status " + type;
+}
+
+function getCurrentGps() {
+  return new Promise(resolve => {
+    const now = Date.now();
+    if (lastGps && (now - Date.parse(lastGps.timestamp)) < 12000) {
+      resolve({ ok:true, gps:lastGps, source:"lastGps" });
+      return;
+    }
+    if (!navigator.geolocation) {
+      resolve({ ok:false, error:"GPS non disponible" });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(pos => {
+      const gps = {
+        lon: pos.coords.longitude,
+        lat: pos.coords.latitude,
+        accuracy: Math.round(pos.coords.accuracy),
+        timestamp: new Date().toISOString()
+      };
+      lastGps = gps;
+      updateGpsMarker();
+      setGpsStatus(`GPS OK — précision ±${gps.accuracy} m`, gps.accuracy <= 15 ? "ok" : "warn");
+      resolve({ ok:true, gps, source:"instant" });
+    }, err => {
+      resolve({ ok:false, error:err.message });
+    }, {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 7000
+    });
+  });
+}
+
+async function addObservation(catId) {
+  const cat = CATEGORIES.find(c => c.id === catId);
+  if (!cat || !selectedFeature) return;
+  const featureAtClick = selectedFeature;
+  const inputsAtClick = Object.fromEntries(["parcelle", "rang", "operateur", "commentaire"].map(id => [id, document.getElementById(id).value]));
+  const now = getNowParts();
+  const gpsResult = await getCurrentGps();
+
+  let rawPoint, rawLat = "", rawLon = "", accuracy = "", gpsStatus = "ok";
+  if (gpsResult.ok) {
+    rawLon = gpsResult.gps.lon;
+    rawLat = gpsResult.gps.lat;
+    accuracy = gpsResult.gps.accuracy;
+    rawPoint = turf.point([rawLon, rawLat]);
+  } else {
+    gpsStatus = "erreur";
+    rawPoint = turf.centroid(featureAtClick);
+    rawLon = rawPoint.geometry.coordinates[0];
+    rawLat = rawPoint.geometry.coordinates[1];
+    accuracy = "";
+    setGpsStatus("GPS indisponible : point placé au centre de la parcelle.", "err");
+  }
+
+  const forced = forcePointIntoSelectedParcel(rawPoint, featureAtClick);
+  const p = forced.point.geometry.coordinates;
+  const obs = {
+    id: now.timestamp + "_" + Math.random().toString(16).slice(2),
+    timestamp: now.timestamp,
+    Date: now.dateISO,
+    Heure: now.heure,
+    Parcelle_selectionnee: inputsAtClick.parcelle,
+    Rang_ou_secteur: inputsAtClick.rang,
+    Operateur: inputsAtClick.operateur,
+    Categorie: cat.name,
+    Categorie_id: cat.id,
+    Latitude_GPS_brute: rawLat,
+    Longitude_GPS_brute: rawLon,
+    Latitude_corrigee: p[1],
+    Longitude_corrigee: p[0],
+    Precision_GPS_m: accuracy,
+    Correction_appliquee: forced.corrected ? "oui" : "non",
+    Distance_correction_m: Math.round(forced.distance_m || 0),
+    Statut_GPS: gpsStatus,
+    Commentaire: inputsAtClick.commentaire
+  };
+
+  if (accuracy !== "" && Number(accuracy) > 30) {
+    setGpsStatus(`Précision GPS faible : ±${accuracy} m. Le point est quand même enregistré.`, "warn");
+  }
+
+  observations.push(obs);
+  saveObservations();
+  recomputeCounts();
+  renderObservations();
+  map.panTo([Number(obs.Latitude_corrigee), Number(obs.Longitude_corrigee)]);
+
+  if (forced.corrected && forced.distance_m > 50) {
+    setGpsStatus(`Point forcé dans la parcelle, mais GPS éloigné d’environ ${Math.round(forced.distance_m)} m. Vérifie la parcelle sélectionnée.`, "warn");
+  }
+}
+
+function forcePointIntoSelectedParcel(point, feature) {
+  try {
+    if (turf.booleanPointInPolygon(point, feature, { ignoreBoundary:false })) {
+      return { point, corrected:false, distance_m:0 };
+    }
+    const line = turf.polygonToLine(feature);
+    const nearest = turf.nearestPointOnLine(line, point, { units:"meters" });
+    let correctedPoint = nearest;
+    const centroid = turf.centroid(feature);
+    // Petit décalage vers le centroïde pour éviter que le point reste techniquement hors polygone.
+    const nc = nearest.geometry.coordinates;
+    const cc = centroid.geometry.coordinates;
+    const nudged = [nc[0] + (cc[0] - nc[0]) * 0.0005, nc[1] + (cc[1] - nc[1]) * 0.0005];
+    const nudgedPoint = turf.point(nudged);
+    if (turf.booleanPointInPolygon(nudgedPoint, feature, { ignoreBoundary:false })) correctedPoint = nudgedPoint;
+    return { point: correctedPoint, corrected:true, distance_m: turf.distance(point, correctedPoint, { units:"meters" }) };
+  } catch(e) {
+    console.warn(e);
+    const c = turf.centroid(feature);
+    return { point:c, corrected:true, distance_m:0 };
+  }
+}
+
+function minusObservation(catId) {
+  const parcelle = document.getElementById("parcelle").value;
+  for (let i = observations.length - 1; i >= 0; i--) {
+    if (observations[i].Parcelle_selectionnee === parcelle && observations[i].Categorie_id === catId) {
+      observations.splice(i, 1);
+      saveObservations();
+      recomputeCounts();
+      renderObservations();
+      return;
+    }
+  }
+  alert("Aucun point à supprimer pour cette catégorie sur la parcelle sélectionnée.");
+}
+
+function deleteLastObservation() {
+  if (observations.length === 0) return alert("Aucune observation.");
+  const last = observations[observations.length - 1];
+  if (!confirm("Supprimer le dernier point : " + last.Categorie + " / " + last.Parcelle_selectionnee + " ?")) return;
+  observations.pop();
+  saveObservations();
+  recomputeCounts();
+  renderObservations();
+}
+
+function resetCurrentParcel() {
+  const parcelle = document.getElementById("parcelle").value;
+  const n = observations.filter(o => o.Parcelle_selectionnee === parcelle).length;
+  if (n === 0) return alert("Aucun point sur cette parcelle.");
+  if (!confirm("Supprimer les " + n + " point(s) de la parcelle " + parcelle + " ?")) return;
+  observations = observations.filter(o => o.Parcelle_selectionnee !== parcelle);
+  saveObservations();
+  recomputeCounts();
+  renderObservations();
+}
+
+function clearAllObservations() {
+  if (observations.length === 0) return alert("Aucune observation.");
+  if (!confirm("Effacer définitivement tous les points enregistrés sur cet appareil ?")) return;
+  observations = [];
+  saveObservations();
+  recomputeCounts();
+  renderObservations();
+}
+
+function recomputeCounts() {
+  const parcelle = document.getElementById("parcelle").value;
+  counts = Object.fromEntries(CATEGORIES.map(c => [c.id, 0]));
+  observations.filter(o => o.Parcelle_selectionnee === parcelle).forEach(o => {
+    if (counts[o.Categorie_id] != null) counts[o.Categorie_id] += 1;
+  });
+  CATEGORIES.forEach(c => {
+    const el = document.getElementById("value_" + c.id);
+    if (el) el.textContent = counts[c.id] || 0;
+  });
+}
+
+function renderObservations() {
+  observationsLayer.clearLayers();
+  observations.forEach(o => addObservationMarker(o, false));
+
+  const summary = document.getElementById("savedSummary");
+  const list = document.getElementById("savedList");
+  const parcelle = document.getElementById("parcelle").value;
+  const obsParcelle = observations.filter(o => o.Parcelle_selectionnee === parcelle);
+  summary.textContent = `${observations.length} point(s) au total — ${obsParcelle.length} sur la parcelle sélectionnée.`;
+
+  const recent = observations.slice(-14).reverse();
+  list.innerHTML = recent.map(o => `
+    <div class="saved-item">
+      <strong>${escapeHtml(o.Categorie)}</strong> — ${escapeHtml(o.Parcelle_selectionnee)}<br>
+      ${escapeHtml(o.Date)} ${escapeHtml(o.Heure)} — ${escapeHtml(o.Rang_ou_secteur || "sans rang/secteur")}<br>
+      GPS ±${escapeHtml(o.Precision_GPS_m || "NA")} m — correction : ${escapeHtml(o.Correction_appliquee)}
+    </div>
+  `).join("");
+}
+
+function addObservationMarker(o, pan) {
+  const cat = CATEGORIES.find(c => c.id === o.Categorie_id) || CATEGORIES[0];
+  const marker = L.circleMarker([Number(o.Latitude_corrigee), Number(o.Longitude_corrigee)], {
+    radius: 7,
+    color: "#111827",
+    weight: 1,
+    fillColor: cat.color,
+    fillOpacity: 0.9
+  });
+  marker.bindPopup(`
+    <strong>${escapeHtml(o.Categorie)}</strong><br>
+    Parcelle : ${escapeHtml(o.Parcelle_selectionnee)}<br>
+    Rang/secteur : ${escapeHtml(o.Rang_ou_secteur || "")}<br>
+    GPS ±${escapeHtml(o.Precision_GPS_m || "NA")} m<br>
+    Correction : ${escapeHtml(o.Correction_appliquee)} (${escapeHtml(o.Distance_correction_m)} m)
+  `);
+  observationsLayer.addLayer(marker);
+  if (pan) map.panTo(marker.getLatLng());
+}
+
+function toggleCounter(id, visible) {
+  const el = document.getElementById("counter_" + id);
+  if (!el) return;
+  el.style.display = visible ? "block" : "none";
+}
+
+function showAllCounters() {
+  document.querySelectorAll(".check-item input").forEach(cb => cb.checked = true);
+  CATEGORIES.forEach(c => toggleCounter(c.id, true));
+}
+
+function exportCSV() {
+  if (observations.length === 0) return alert("Aucune observation à exporter.");
+  const headers = ["Date","Heure","timestamp","Parcelle_selectionnee","Rang_ou_secteur","Operateur","Categorie","Latitude_GPS_brute","Longitude_GPS_brute","Latitude_corrigee","Longitude_corrigee","Precision_GPS_m","Correction_appliquee","Distance_correction_m","Statut_GPS","Commentaire"];
+  const rows = observations.map(o => headers.map(h => o[h] ?? ""));
+  downloadText("comptage_vigne_points_" + today() + ".csv", toCSV(headers, rows), "text/csv;charset=utf-8;");
+}
+
+function exportSummaryCSV() {
+  if (observations.length === 0) return alert("Aucune observation à exporter.");
+  const byKey = {};
+  observations.forEach(o => {
+    const key = o.Parcelle_selectionnee + "||" + (o.Rang_ou_secteur || "");
+    if (!byKey[key]) {
+      byKey[key] = { Parcelle:o.Parcelle_selectionnee, Rang_ou_secteur:o.Rang_ou_secteur || "" };
+      CATEGORIES.forEach(c => byKey[key][c.name] = 0);
+    }
+    byKey[key][o.Categorie] = (byKey[key][o.Categorie] || 0) + 1;
+  });
+  const headers = ["Parcelle","Rang_ou_secteur", ...CATEGORIES.map(c => c.name), "Total"];
+  const rows = Object.values(byKey).map(r => {
+    const total = CATEGORIES.reduce((s,c) => s + Number(r[c.name] || 0), 0);
+    return [r.Parcelle, r.Rang_ou_secteur, ...CATEGORIES.map(c => r[c.name] || 0), total];
+  });
+  downloadText("comptage_vigne_synthese_" + today() + ".csv", toCSV(headers, rows), "text/csv;charset=utf-8;");
+}
+
+function exportGeoJSON() {
+  if (observations.length === 0) return alert("Aucune observation à exporter.");
+  const fc = {
+    type:"FeatureCollection",
+    name:"observations_comptage_vigne",
+    crs: { type:"name", properties:{ name:"EPSG:4326" } },
+    features: observations.map(o => ({
+      type:"Feature",
+      properties: { ...o },
+      geometry: { type:"Point", coordinates:[Number(o.Longitude_corrigee), Number(o.Latitude_corrigee)] }
+    }))
+  };
+  downloadText("comptage_vigne_points_" + today() + ".geojson", JSON.stringify(fc, null, 2), "application/geo+json;charset=utf-8;");
+}
+
+function toCSV(headers, rows) {
+  const csv = headers.map(csvEscape).join(";") + "\n" + rows.map(row => row.map(csvEscape).join(";")).join("\n") + "\n";
+  return "\ufeff" + csv;
+}
+
+function csvEscape(v) {
+  const s = String(v ?? "");
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
+function downloadText(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function loadObservations() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+  catch(e) { return []; }
+}
+
+function saveObservations() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(observations));
+  saveDraft();
+}
+
+function saveDraft() {
+  const draft = {
+    parcelle: document.getElementById("parcelle")?.value || "",
+    rang: document.getElementById("rang")?.value || "",
+    operateur: document.getElementById("operateur")?.value || "",
+    commentaire: document.getElementById("commentaire")?.value || "",
+    savedAt: new Date().toISOString()
+  };
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+}
+
+function loadDraft() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+    if (!draft) return;
+    if (draft.parcelle && [...document.getElementById("parcelle").options].some(o => o.value === draft.parcelle)) {
+      document.getElementById("parcelle").value = draft.parcelle;
+    }
+    document.getElementById("rang").value = draft.rang || "";
+    document.getElementById("operateur").value = draft.operateur || "";
+    document.getElementById("commentaire").value = draft.commentaire || "";
+  } catch(e) {}
+}
+
+function getNowParts() {
+  const now = new Date();
+  return {
+    dateISO: now.toISOString().slice(0,10),
+    heure: now.toTimeString().slice(0,8),
+    timestamp: now.toISOString()
+  };
+}
+
+function today() {
+  return new Date().toISOString().slice(0,10);
+}
+
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/`/g, "&#096;");
+}
+
+init();
+</script>
+</body>
+</html>
